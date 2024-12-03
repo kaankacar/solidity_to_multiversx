@@ -2,9 +2,18 @@ use solang_parser::{parse, pt};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
+use std::{env};
 
 fn main() -> io::Result<()> {
-    let input_path = "SimpleContract.sol"; // Update with your file path
+
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        eprintln!("Usage: {} <path_to_solidity_file>", args[0]);
+        return Ok(());
+    }
+
+    let input_path = &args[1];
+
     let sol_code = fs::read_to_string(input_path)?;
 
     let parsed = parse(&sol_code, 0);
