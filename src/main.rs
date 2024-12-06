@@ -1,12 +1,11 @@
 mod parser;
-mod attribute_extraction;
 mod transpiler;
 mod helper_functions;
 mod final_conversion;
 mod type_mapper;
 mod type_name;
 
-use std::{env, fs::{self, File}, io::{self, Write}, path::Path};
+use std::{env, fs::{self}, io::Write};
 
 
 use crate::final_conversion::convert_solidity_to_rust;

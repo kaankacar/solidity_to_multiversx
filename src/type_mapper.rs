@@ -1,5 +1,5 @@
 use crate::type_name::{TypeName, ElementaryType};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 pub fn map_type(type_name: &TypeName) -> Result<String> {
     match type_name {
@@ -11,9 +11,8 @@ pub fn map_type(type_name: &TypeName) -> Result<String> {
             ElementaryType::Int(size) => Ok(format!("i{}", size)),
             ElementaryType::Bytes(size) => Ok(format!("[u8; {}]", size.unwrap_or(32))),
         },
-        TypeName::Array(base_ty, size) => Ok(format!("Vec<{}>", map_type(base_ty)?)),
+        TypeName::Array(base_ty, _) => Ok(format!("Vec<{}>", map_type(base_ty)?)),
         TypeName::Mapping { key_type, value_type } => Ok(format!("HashMap<{}, {}>", map_type(key_type)?, map_type(value_type)?)),
         TypeName::UserDefined(name) => Ok(name.clone()),
-        _ => Err(anyhow!("Unsupported type")),
     }
 }

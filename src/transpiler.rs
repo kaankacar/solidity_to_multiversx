@@ -1,6 +1,5 @@
-use crate::attribute_extraction::MultiversXAttribute;
 use crate::helper_functions::{
-    convert_expression_to_type, transform_expression, transform_visibility,
+    convert_expression_to_type, transform_expression,
 };
 use crate::parser::ParsedContract;
 use crate::type_mapper::map_type;
@@ -46,7 +45,6 @@ pub enum RustNode {
     StorageDefinition {
         name: String,
         type_name: String,
-        visibility: RustVisibility,
     },
     Expression(RustExpression),
     Return(Option<RustExpression>),
@@ -79,7 +77,6 @@ pub enum RustVisibility {
 
 pub fn transform_with_attributes(
     parsed: ParsedContract,
-    attributes: Vec<MultiversXAttribute>,
 ) -> Result<String> {
     let mut output = String::new();
 
@@ -100,7 +97,7 @@ pub fn transform_with_attributes(
                 "#[multiversx_sc::contract]\npub trait {} {{\n",
                 contract_name
             ));
-            let rust_body = transform_contract_with_attributes(&contract, &attributes)?;
+            let rust_body = transform_contract_with_attributes(&contract)?;
             for node in &rust_body {
                 if let RustNode::StorageDefinition {
                     name, type_name, ..
@@ -216,7 +213,6 @@ fn transform_rust_node_to_code(node: &RustNode) -> Result<String> {
         }
         RustNode::Function {
             name,
-            params,
             body,
             ..
         } if name == "block" => {
@@ -257,7 +253,6 @@ fn transform_rust_node_to_code(node: &RustNode) -> Result<String> {
 
 fn transform_contract_with_attributes(
     contract: &pt::ContractDefinition,
-    attributes: &[MultiversXAttribute],
 ) -> Result<Vec<RustNode>> {
     let mut rust_nodes = Vec::new();
     for part in &contract.parts {
@@ -272,20 +267,10 @@ fn transform_contract_with_attributes(
                 rust_nodes.push(RustNode::StorageDefinition {
                     name,
                     type_name,
-                    visibility: RustVisibility::Public, // Assuming public for simplicity
                 });
             }
             pt::ContractPart::FunctionDefinition(func) => {
-                let is_endpoint = attributes
-                    .iter()
-                    .any(|attr| matches!(attr, MultiversXAttribute::Endpoint(_)));
-                let is_view = attributes
-                    .iter()
-                    .any(|attr| matches!(attr, MultiversXAttribute::View));
-                let is_payable = attributes
-                    .iter()
-                    .any(|attr| matches!(attr, MultiversXAttribute::Payable));
-
+                
                 rust_nodes.push(transform_function_with_attributes(func)?);
             }
             _ => continue,
@@ -345,13 +330,13 @@ fn transform_function_with_attributes(func: &pt::FunctionDefinition) -> Result<R
                     pt::Visibility::Internal(_) | pt::Visibility::Private(_) => {
                         Some(RustVisibility::Private)
                     }
-                    pt::Visibility::External(_) => Some(RustVisibility::Public), // Treat external as public in this context
+                    pt::Visibility::External(_) => Some(RustVisibility::Public), 
                 }
             } else {
                 None
             }
         })
-        .unwrap_or(RustVisibility::Private); // Default to private if no visibility specified
+        .unwrap_or(RustVisibility::Private); 
 
     // Check for return statement and determine body type
     let body_contains_return = match &func.body {
@@ -359,7 +344,6 @@ fn transform_function_with_attributes(func: &pt::FunctionDefinition) -> Result<R
         None => false,
     };
 
-    // Determine `is_view` and `is_endpoint`
     let is_view = func
         .name
         .as_ref()

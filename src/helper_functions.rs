@@ -1,14 +1,14 @@
-use crate::{transpiler::{RustExpression, RustVisibility}, type_name::{ElementaryType, TypeName}};
-use solang_parser::pt::{Expression, Type, Visibility};
+use crate::{transpiler::RustExpression, type_name::{ElementaryType, TypeName}};
+use solang_parser::pt::{Expression, Type};
 use anyhow::{Result, anyhow};
 
 
-pub fn transform_visibility(visibility: Visibility) -> RustVisibility {
+/*pub fn transform_visibility(visibility: Visibility) -> RustVisibility {
     match visibility {
         Visibility::Public(_) | Visibility::External(_) => RustVisibility::Public,
         Visibility::Private(_) | Visibility::Internal(_) => RustVisibility::Private,
     }
-}
+}*/
 
 pub fn transform_expression(expr: &Expression) -> Result<RustExpression> {
     match expr {
