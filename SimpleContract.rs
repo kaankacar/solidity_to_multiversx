@@ -5,25 +5,22 @@ use multiversx_sc::imports::*;
 #[multiversx_sc::contract]
 pub trait SimpleContract {
     #[storage_mapper("storedData")]
-    pub fn storedData(&self) -> SingleValueMapper<u64>;
-
+    pub fn storedData(&self) -> SingleValueMapper<u256>;
 }
 
 impl SimpleContract {
-    // Constructor (handled differently)
-    pub fn unnamed(&self, initialValue: u64) {
+    #[init]
+     fn this_is_the_constructor(&self, initialValue: u256) {
         storedData.set(initialValue);
     }
-
     #[endpoint]
-    pub fn set(&self, x: u64) {
+     fn set(&self, x: u256) {
         storedData.set(x);
-        // Unsupported statement
+        DataStored(x)
     }
-
-    #[endpoint]
-    pub fn get(&self, ) {
-        return storedData; // Convert expression
+    #[view]
+    pub  fn get(&self, ) {
+        return storedData;
     }
-
 }
+

@@ -9,7 +9,7 @@ contract SimpleContract {
         storedData = initialValue;
     }
 
-    function set(uint256 x) public {
+    function set(uint256 x) {
         storedData = x;
         emit DataStored(x);
     }
