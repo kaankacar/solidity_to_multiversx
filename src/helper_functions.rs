@@ -1,4 +1,4 @@
-use crate::{transpiler::RustExpression, type_name::{ElementaryType, TypeName}};
+use crate::{rust_ast::RustExpression, type_name::{ElementaryType, TypeName}};
 use solang_parser::pt::{Expression, Type};
 use anyhow::{Result, anyhow};
 
@@ -21,6 +21,21 @@ pub fn transform_expression(expr: &Expression) -> Result<RustExpression> {
         Expression::Add(_, left, right) => Ok(RustExpression::BinaryOperation {
             left: Box::new(transform_expression(left)?),
             operator: "+".to_string(),
+            right: Box::new(transform_expression(right)?),
+        }),
+        Expression::Subtract(_, left, right) => Ok(RustExpression::BinaryOperation {
+            left: Box::new(transform_expression(left)?),
+            operator: "-".to_string(),
+            right: Box::new(transform_expression(right)?),
+        }),
+        Expression::Multiply(_, left, right) => Ok(RustExpression::BinaryOperation {
+            left: Box::new(transform_expression(left)?),
+            operator: "*".to_string(),
+            right: Box::new(transform_expression(right)?),
+        }),
+        Expression::Divide(_, left, right) => Ok(RustExpression::BinaryOperation {
+            left: Box::new(transform_expression(left)?),
+            operator: "/".to_string(),
             right: Box::new(transform_expression(right)?),
         }),
         _ => Err(anyhow!("Unsupported expression type {:?}", expr)),

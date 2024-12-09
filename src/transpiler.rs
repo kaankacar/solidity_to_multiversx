@@ -1,83 +1,12 @@
-use crate::helper_functions::{
-    convert_expression_to_type, transform_expression,
-};
+use crate::helper_functions::convert_expression_to_type;
 use crate::parser::ParsedContract;
+use crate::rust_ast::{RustExpression, RustNode, RustParameter, RustVisibility};
 use crate::type_mapper::map_type;
+use crate::statement::transform_statement;
 use anyhow::{anyhow, Result};
 use solang_parser::pt;
 
-#[derive(Debug, Clone)]
-pub enum RustExpression {
-    Identifier(String),
-    NumberLiteral(String),
-    StringLiteral(String),
-    BooleanLiteral(bool),
-    BinaryOperation {
-        left: Box<RustExpression>,
-        operator: String,
-        right: Box<RustExpression>,
-    },
-    FunctionCall {
-        function: Box<RustExpression>,
-        arguments: Vec<RustExpression>,
-    },
-    MemberAccess {
-        expression: Box<RustExpression>,
-        member: String,
-    },
-}
-
-#[derive(Debug)]
-pub enum RustNode {
-    Contract {
-        name: String,
-        body: Vec<RustNode>,
-    },
-    Function {
-        name: String,
-        params: Vec<RustParameter>,
-        returns: Option<Vec<RustParameter>>,
-        body: Vec<RustNode>,
-        visibility: RustVisibility,
-        is_endpoint: bool,
-        is_view: bool,
-    },
-    StorageDefinition {
-        name: String,
-        type_name: String,
-    },
-    Expression(RustExpression),
-    Return(Option<RustExpression>),
-    Assignment {
-        target: Box<RustExpression>,
-        value: Box<RustExpression>,
-    },
-    IfStatement {
-        condition: Box<RustExpression>,
-        body: Vec<RustNode>,
-        else_body: Option<Vec<RustNode>>,
-    },
-    WhileStatement {
-        condition: Box<RustExpression>,
-        body: Vec<RustNode>,
-    },
-}
-
-#[derive(Debug)]
-pub struct RustParameter {
-    pub name: String,
-    pub type_name: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RustVisibility {
-    Public,
-    Private,
-}
-
-pub fn transform_with_attributes(
-    parsed: ParsedContract,
-) -> Result<String> {
+pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
     let mut output = String::new();
 
     // Add header
@@ -148,18 +77,26 @@ pub fn transform_with_attributes(
                         "pub "
                     };
 
-                    output.push_str(&format!(
-                        "    {} fn {}(&self",
-                        function_visibility, function_name
-                    ));
                     let params_str = params
                         .iter()
                         .map(|p| format!("{}: {}", p.name, p.type_name))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    output.push_str(&format!(", {}) {{\n", params_str));
+                    // Add function signature
+                    output.push_str(&format!(
+                        "    {}fn {}(&self{}) {{\n",
+                        function_visibility,
+                        function_name,
+                        if params_str.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {}", params_str)
+                        }
+                    ));
 
                     // Add function body
+                    println!("{:?} params", body);
+
                     for stmt in body {
                         output.push_str(&format!(
                             "        {}\n",
@@ -179,44 +116,107 @@ pub fn transform_with_attributes(
 
 fn transform_rust_node_to_code(node: &RustNode) -> Result<String> {
     match node {
-        RustNode::Expression(expr) => match expr {
-            RustExpression::MemberAccess { expression, member } => {
-                let expr_code =
-                    transform_rust_node_to_code(&RustNode::Expression(*expression.clone()))?;
-                Ok(format!("{}.{}", expr_code, member))
+        RustNode::Expression(RustExpression::FunctionCall {
+            function,
+            arguments,
+        }) => {
+            if let RustExpression::MemberAccess { expression, member } = *function.clone() {
+                // Handle `increment` and `decrement` operations
+                if member == "increment" || member == "decrement" {
+                    let operation = if member == "increment" { "+" } else { "-" };
+
+                    if let Some(arg) = arguments.first() {
+                        let argument_code =
+                            transform_rust_node_to_code(&RustNode::Expression(arg.clone()))?;
+
+                        return Ok(format!(
+                            "let current_value = self.{}().get();\n        self.{}().set(current_value {} 1);",
+                            argument_code, argument_code, operation
+                        ));
+                    }
+                // Handle `pre_increment` and `pre_decrement` operations
+                } else if member == "pre_increment" || member == "pre_decrement" {
+                    let operation = if member == "pre_increment" { "+" } else { "-" };
+
+                    if let Some(arg) = arguments.first() {
+                        let argument_code =
+                            transform_rust_node_to_code(&RustNode::Expression(arg.clone()))?;
+
+                        return Ok(format!(
+                            "let current_value = self.{}().get() {} 1;\n        self.{}().set(current_value);",
+                            argument_code, operation, argument_code
+                        ));
+                    }
+                // Handle `set` calls on storage mappers
+                } else if member == "set" {
+                    if let Some(arg) = arguments.first() {
+                        let storage_variable = transform_rust_node_to_code(&RustNode::Expression(
+                            *expression.clone(),
+                        ))?;
+                        let argument_code =
+                            transform_rust_node_to_code(&RustNode::Expression(arg.clone()))?;
+
+                        return Ok(format!(
+                            "self.{}().set({});",
+                            storage_variable, argument_code
+                        ));
+                    }
+                }
             }
-            RustExpression::FunctionCall {
+
+            // Fallback to default function call handling for other cases
+            let func_code = transform_rust_node_to_code(&RustNode::Expression(*function.clone()))?;
+            let args_code = arguments
+                .iter()
+                .map(|arg| transform_rust_node_to_code(&RustNode::Expression(arg.clone())))
+                .collect::<Result<Vec<_>>>()?
+                .join(", ");
+            Ok(format!("{}({})", func_code, args_code))
+        }
+
+        // Handle arithmetic operations
+        RustNode::Expression(RustExpression::BinaryOperation {
+            left,
+            operator,
+            right,
+        }) => {
+            if let RustExpression::FunctionCall {
                 function,
                 arguments,
-            } => {
-                let func_code =
-                    transform_rust_node_to_code(&RustNode::Expression(*function.clone()))?;
-                let args_code = arguments
-                    .iter()
-                    .map(|arg| transform_rust_node_to_code(&RustNode::Expression(arg.clone())))
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ");
-                Ok(format!("{}({})", func_code, args_code))
+            } = *left.clone()
+            {
+                
+                if let RustExpression::MemberAccess { expression, member } = *function {
+                    if member.ends_with(".get") {
+                        let member_code =
+                            transform_rust_node_to_code(&RustNode::Expression(*expression))?;
+                        let right_code =
+                            transform_rust_node_to_code(&RustNode::Expression(*right.clone()))?;
+
+                        return Ok(format!(
+                            "let current_value = self.{}().get();\n        self.{}().set(current_value {} {});",
+                            member_code,
+                            member_code,
+                            operator,
+                            right_code
+                        ));
+                    }
+                }
             }
-            RustExpression::Identifier(name) => Ok(name.clone()),
-            _ => Ok("// Unsupported expression".to_string()),
-        },
-        RustNode::Return(Some(expr)) => {
-            let expr_code = transform_rust_node_to_code(&RustNode::Expression((*expr).clone()))?;
-            Ok(format!("return {};", expr_code))
+
+            // Fallback for other binary operations
+            let left_code = transform_rust_node_to_code(&RustNode::Expression(*left.clone()))?;
+            let right_code = transform_rust_node_to_code(&RustNode::Expression(*right.clone()))?;
+            Ok(format!("{} {} {}", left_code, operator, right_code))
         }
-        RustNode::Return(None) => Ok("return;".to_string()),
-        RustNode::Assignment { target, value } => {
-            let target_code = transform_rust_node_to_code(&RustNode::Expression(*target.clone()))?;
-            let value_code = transform_rust_node_to_code(&RustNode::Expression(*value.clone()))?;
-            Ok(format!("{}.set({});", target_code, value_code))
-        }
-        RustNode::Function {
-            name,
-            body,
-            ..
-        } if name == "block" => {
-            // Handle "block" as inline statements
+        // Handle variable identifiers
+        RustNode::Expression(RustExpression::Identifier(name)) => Ok(name.clone()),
+
+        // Handle number literals
+        RustNode::Expression(RustExpression::NumberLiteral(value)) => Ok(value.clone()),
+
+        // Handle block nodes
+        RustNode::Function { name, body, .. } if name == "block" => {
             let body_code = body
                 .iter()
                 .map(transform_rust_node_to_code)
@@ -224,37 +224,75 @@ fn transform_rust_node_to_code(node: &RustNode) -> Result<String> {
                 .join("\n        ");
             Ok(body_code)
         }
+
+        // Handle assignments
+        RustNode::Assignment { target, value } => {
+            if let RustExpression::BinaryOperation {
+                left,
+                operator,
+                right,
+            } = *value.clone()
+            {
+                let operator_code = operator; // "+", "-", etc.
+                let right_code = transform_rust_node_to_code(&RustNode::Expression(*right))?;
+                let target_code =
+                    transform_rust_node_to_code(&RustNode::Expression(*target.clone()))?;
+                Ok(format!(
+                    "let current_value = self.{}().get();\n        self.{}().set(current_value {} {});",
+                    target_code, target_code, operator_code, right_code
+                ))
+            } else {
+                Err(anyhow!("Unsupported assignment value: {:?}", value))
+            }
+        }
+
+        // Handle function definitions
         RustNode::Function {
             name,
             params,
             body,
+            visibility,
             ..
         } => {
-            let params_code = params
+            let visibility_str = if *visibility == RustVisibility::Public {
+                "pub "
+            } else {
+                ""
+            };
+
+            let params_str = params
                 .iter()
-                .map(|p| format!("{}: {}", p.name, p.type_name))
+                .map(|param| format!("{}: {}", param.name, param.type_name))
                 .collect::<Vec<_>>()
                 .join(", ");
+
             let body_code = body
                 .iter()
                 .map(transform_rust_node_to_code)
                 .collect::<Result<Vec<_>>>()?
                 .join("\n        ");
+
             Ok(format!(
-                "fn {}({}) {{\n        {}\n    }}",
-                name, params_code, body_code
+                "    {}fn {}(&self{}) {{\n        {}\n    }}",
+                visibility_str,
+                name,
+                if params_str.is_empty() {
+                    "".to_string()
+                } else {
+                    format!(", {}", params_str)
+                },
+                body_code
             ))
         }
-        _ => {
-            Ok("// Unsupported statement 3".to_string())
-        }
+
+        // Unsupported cases
+        _ => Err(anyhow!("Unsupported RustNode type: {:?}", node)),
     }
 }
 
-fn transform_contract_with_attributes(
-    contract: &pt::ContractDefinition,
-) -> Result<Vec<RustNode>> {
+fn transform_contract_with_attributes(contract: &pt::ContractDefinition) -> Result<Vec<RustNode>> {
     let mut rust_nodes = Vec::new();
+
     for part in &contract.parts {
         match part {
             pt::ContractPart::VariableDefinition(var) => {
@@ -264,18 +302,84 @@ fn transform_contract_with_attributes(
                     .map(|id| id.name.clone())
                     .unwrap_or_default();
                 let type_name = map_type(&convert_expression_to_type(&var.ty)?)?;
-                rust_nodes.push(RustNode::StorageDefinition {
-                    name,
-                    type_name,
-                });
+                rust_nodes.push(RustNode::StorageDefinition { name, type_name });
             }
             pt::ContractPart::FunctionDefinition(func) => {
-                
                 rust_nodes.push(transform_function_with_attributes(func)?);
             }
-            _ => continue,
+            pt::ContractPart::EnumDefinition(enum_def) => {
+                let name = enum_def
+                    .name
+                    .as_ref()
+                    .map(|id| id.name.clone())
+                    .unwrap_or_default();
+                let variants = enum_def
+                    .values
+                    .iter()
+                    .map(|variant| {
+                        variant
+                            .as_ref()
+                            .map(|id| id.name.clone())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                rust_nodes.push(RustNode::EnumDefinition { name, variants });
+            }
+            pt::ContractPart::StructDefinition(struct_def) => {
+                let name = struct_def
+                    .name
+                    .as_ref()
+                    .map(|id| id.name.clone())
+                    .unwrap_or_default();
+                let fields = struct_def
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let field_name = field
+                            .name
+                            .as_ref()
+                            .map(|id| id.name.clone())
+                            .unwrap_or_default();
+                        let field_type = map_type(&convert_expression_to_type(&field.ty)?)?;
+                        Ok(RustParameter {
+                            name: field_name,
+                            type_name: field_type,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                rust_nodes.push(RustNode::StructDefinition { name, fields });
+            }
+            pt::ContractPart::EventDefinition(event_def) => {
+                let name = event_def
+                    .name
+                    .as_ref()
+                    .map(|id| id.name.clone())
+                    .unwrap_or_default();
+                let params = event_def
+                    .fields
+                    .iter()
+                    .map(|param| {
+                        let param_name = param
+                            .name
+                            .as_ref()
+                            .map(|id| id.name.clone())
+                            .unwrap_or_default();
+                        let param_type = map_type(&convert_expression_to_type(&param.ty)?)?;
+                        Ok(RustParameter {
+                            name: param_name,
+                            type_name: param_type,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                rust_nodes.push(RustNode::EventDefinition { name, params });
+            }
+            _ => {
+                // Log unsupported parts for debugging
+                println!("Unsupported contract part: {:?}", part);
+            }
         }
     }
+
     Ok(rust_nodes)
 }
 
@@ -330,13 +434,13 @@ fn transform_function_with_attributes(func: &pt::FunctionDefinition) -> Result<R
                     pt::Visibility::Internal(_) | pt::Visibility::Private(_) => {
                         Some(RustVisibility::Private)
                     }
-                    pt::Visibility::External(_) => Some(RustVisibility::Public), 
+                    pt::Visibility::External(_) => Some(RustVisibility::Public),
                 }
             } else {
                 None
             }
         })
-        .unwrap_or(RustVisibility::Private); 
+        .unwrap_or(RustVisibility::Private);
 
     // Check for return statement and determine body type
     let body_contains_return = match &func.body {
@@ -388,69 +492,4 @@ fn statements_contains_return(statements: &[pt::Statement]) -> bool {
 
 fn transform_statements(statements: &[pt::Statement]) -> Result<Vec<RustNode>> {
     statements.iter().map(transform_statement).collect()
-}
-
-fn transform_statement(stmt: &pt::Statement) -> Result<RustNode> {
-    match stmt {
-        // Handle Block statements
-        pt::Statement::Block { statements, .. } => {
-            let body = statements
-                .iter()
-                .map(transform_statement)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(RustNode::Function {
-                name: "block".to_string(), // Placeholder for the block
-                params: vec![],
-                returns: None,
-                body,
-                visibility: RustVisibility::Private,
-                is_endpoint: false,
-                is_view: false,
-            })
-        }
-
-        // Handle Assignment expressions
-        pt::Statement::Expression(_, expr) => {
-            match expr {
-                // Match an assignment expression
-                pt::Expression::Assign(_, left, right) => Ok(RustNode::Assignment {
-                    target: Box::new(transform_expression(left)?),
-                    value: Box::new(transform_expression(right)?),
-                }),
-
-                // Handle other expressions
-                _ => {
-                    println!("{:?}", expr);
-                    Err(anyhow!("Unsupported expression: {:?}", expr))
-                }
-            }
-        }
-
-        // Handle Emit statements
-        pt::Statement::Emit(_, function_call) => {
-            if let pt::Expression::FunctionCall(_, function, args) = function_call {
-                let event_name = match function.as_ref() {
-                    pt::Expression::Variable(identifier) => identifier.name.clone(),
-                    _ => return Err(anyhow!("Unsupported function in Emit")),
-                };
-                let transformed_args = args
-                    .iter()
-                    .map(transform_expression)
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(RustNode::Expression(RustExpression::FunctionCall {
-                    function: Box::new(RustExpression::Identifier(event_name)),
-                    arguments: transformed_args,
-                }))
-            } else {
-                Err(anyhow!("Unsupported Emit statement"))
-            }
-        }
-
-        // Handle Return statements
-        pt::Statement::Return(_, expr) => Ok(RustNode::Return(
-            expr.as_ref().map(transform_expression).transpose()?,
-        )),
-
-        _ => Err(anyhow!("Unsupported statement type")),
-    }
 }

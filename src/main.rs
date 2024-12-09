@@ -4,6 +4,8 @@ mod helper_functions;
 mod final_conversion;
 mod type_mapper;
 mod type_name;
+mod rust_ast;
+mod statement;
 
 use std::{env, fs::{self}, io::Write};
 
@@ -12,8 +14,6 @@ use crate::final_conversion::convert_solidity_to_rust;
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    //let solidity_code = "contract TestContract { uint256 public value; function setValue(uint256 _value) public { value = _value; } }";
-
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
