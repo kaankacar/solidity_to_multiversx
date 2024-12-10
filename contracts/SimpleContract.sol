@@ -9,9 +9,9 @@ contract SimpleContract {
         storedData = initialValue;
     }
 
-    function set(uint256 x) {
+    function setData(uint256 x) {
         storedData = x;
-        emit DataStored(x);
+        //emit DataStored(x);
     }
 
     function get() public view returns (uint256) {

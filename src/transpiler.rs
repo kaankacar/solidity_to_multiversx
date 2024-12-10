@@ -1,9 +1,10 @@
 use crate::helper_functions::convert_expression_to_type;
 use crate::parser::ParsedContract;
 use crate::rust_ast::{RustExpression, RustNode, RustParameter, RustVisibility};
-use crate::type_mapper::map_type;
 use crate::statement::transform_statement;
+use crate::type_mapper::map_type;
 use anyhow::{anyhow, Result};
+use inflector::Inflector;
 use solang_parser::pt;
 
 pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
@@ -28,14 +29,41 @@ pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
             ));
             let rust_body = transform_contract_with_attributes(&contract)?;
             for node in &rust_body {
-                if let RustNode::StorageDefinition {
-                    name, type_name, ..
-                } = node
-                {
-                    output.push_str(&format!(
-                        "    #[storage_mapper(\"{}\")]\n    pub fn {}(&self) -> SingleValueMapper<{}>;\n",
-                        name, name, type_name
-                    ));
+                match node {
+                    // Handle storage definitions
+                    RustNode::StorageDefinition {
+                        name, type_name, ..
+                    } => {
+                        output.push_str(&format!(
+                            "    #[storage_mapper(\"{}\")]\n    pub fn {}(&self) -> SingleValueMapper<{}>;\n",
+                            name,
+                            name.to_snake_case(), // Convert to snake_case for Rust naming conventions
+                            type_name
+                        ));
+                    }
+
+                    // Handle constructor definitions
+                    RustNode::Function {
+                        name,
+                        params,
+                        visibility,
+                        ..
+                    } if name == "init" && *visibility == RustVisibility::Public => {
+                        let params_str = params
+                            .iter()
+                            .map(|p| format!("{}: {}", p.name.to_snake_case(), p.type_name))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        output.push_str(&format!(
+                            "    #[init]\n    fn init(&self, {}) {{\n        // Initialization logic here\n    }}\n",
+                            params_str
+                        ));
+                    }
+
+                    _ => {
+                        // Log unsupported nodes for debugging
+                        println!("Unsupported node type in trait definition: {:?}", node);
+                    }
                 }
             }
             output.push_str("}\n\n");
@@ -50,27 +78,25 @@ pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
                     is_endpoint,
                     is_view,
                     visibility,
+                    returns, // Add this field from the RustNode
                     ..
                 } = node
                 {
-                    // Add annotation (endpoint or view)
+                    let annotation_name = snake_to_camel_case(&name);
+
                     let annotation = if is_endpoint {
-                        "    #[endpoint]\n"
+                        format!("    #[endpoint({})]\n", annotation_name)
                     } else if is_view {
-                        "    #[view]\n"
-                    } else if name.is_empty() {
-                        "    #[init]\n"
+                        format!("    #[view({})]\n", annotation_name)
+                    } else if annotation_name.is_empty() {
+                        "    #[init]\n".to_string()
                     } else {
-                        ""
+                        String::new()
                     };
-                    output.push_str(annotation);
+                    output.push_str(&annotation);
 
                     // Add function signature
-                    let function_name = if name.is_empty() {
-                        "this_is_the_constructor"
-                    } else {
-                        &name
-                    };
+                    let function_name = if name.is_empty() { "init" } else { &name.to_snake_case() };
                     let function_visibility = if visibility == RustVisibility::Private {
                         ""
                     } else {
@@ -82,21 +108,31 @@ pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
                         .map(|p| format!("{}: {}", p.name, p.type_name))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    // Add function signature
+
+                    // Generate the return type from the `returns` field
+                    let return_type = if let Some(return_params) = returns {
+                        if !return_params.is_empty() {
+                            format!(" -> {}", return_params[0].type_name)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
                     output.push_str(&format!(
-                        "    {}fn {}(&self{}) {{\n",
+                        "    {}fn {}(&self{}){} {{\n",
                         function_visibility,
                         function_name,
                         if params_str.is_empty() {
                             String::new()
                         } else {
                             format!(", {}", params_str)
-                        }
+                        },
+                        return_type
                     ));
 
                     // Add function body
-                    println!("{:?} params", body);
-
                     for stmt in body {
                         output.push_str(&format!(
                             "        {}\n",
@@ -180,35 +216,11 @@ fn transform_rust_node_to_code(node: &RustNode) -> Result<String> {
             operator,
             right,
         }) => {
-            if let RustExpression::FunctionCall {
-                function,
-                arguments,
-            } = *left.clone()
-            {
-                
-                if let RustExpression::MemberAccess { expression, member } = *function {
-                    if member.ends_with(".get") {
-                        let member_code =
-                            transform_rust_node_to_code(&RustNode::Expression(*expression))?;
-                        let right_code =
-                            transform_rust_node_to_code(&RustNode::Expression(*right.clone()))?;
-
-                        return Ok(format!(
-                            "let current_value = self.{}().get();\n        self.{}().set(current_value {} {});",
-                            member_code,
-                            member_code,
-                            operator,
-                            right_code
-                        ));
-                    }
-                }
-            }
-
-            // Fallback for other binary operations
             let left_code = transform_rust_node_to_code(&RustNode::Expression(*left.clone()))?;
             let right_code = transform_rust_node_to_code(&RustNode::Expression(*right.clone()))?;
             Ok(format!("{} {} {}", left_code, operator, right_code))
         }
+
         // Handle variable identifiers
         RustNode::Expression(RustExpression::Identifier(name)) => Ok(name.clone()),
 
@@ -227,24 +239,23 @@ fn transform_rust_node_to_code(node: &RustNode) -> Result<String> {
 
         // Handle assignments
         RustNode::Assignment { target, value } => {
-            if let RustExpression::BinaryOperation {
-                left,
-                operator,
-                right,
-            } = *value.clone()
-            {
-                let operator_code = operator; // "+", "-", etc.
-                let right_code = transform_rust_node_to_code(&RustNode::Expression(*right))?;
-                let target_code =
-                    transform_rust_node_to_code(&RustNode::Expression(*target.clone()))?;
-                Ok(format!(
-                    "let current_value = self.{}().get();\n        self.{}().set(current_value {} {});",
-                    target_code, target_code, operator_code, right_code
-                ))
+            let target_code = transform_rust_node_to_code(&RustNode::Expression(*target.clone()))?;
+            let value_code = transform_rust_node_to_code(&RustNode::Expression(*value.clone()))?;
+            Ok(format!("self.{}().set({});", target_code, value_code))
+        }
+
+        // Handle return statements
+        RustNode::Return(Some(expression)) => {
+            if let RustExpression::Identifier(name) = expression.clone() {
+                Ok(format!("self.{}().get()", name.to_snake_case()))
             } else {
-                Err(anyhow!("Unsupported assignment value: {:?}", value))
+                let return_value =
+                    transform_rust_node_to_code(&RustNode::Expression(expression.clone()))?;
+                Ok(format!("return {}; // Convert expression", return_value))
             }
         }
+
+        RustNode::Return(None) => Ok("return;".to_string()),
 
         // Handle function definitions
         RustNode::Function {
@@ -453,8 +464,7 @@ fn transform_function_with_attributes(func: &pt::FunctionDefinition) -> Result<R
         .as_ref()
         .map(|id| id.name.contains("get"))
         .unwrap_or(false);
-    // TODO check for statement
-    //&& body_contains_return;
+    let _ = &&body_contains_return;
 
     let is_endpoint = !is_view
         && !func
@@ -489,7 +499,31 @@ fn statements_contains_return(statements: &[pt::Statement]) -> bool {
         .iter()
         .any(|stmt| matches!(stmt, pt::Statement::Return(_, _)))
 }
-
 fn transform_statements(statements: &[pt::Statement]) -> Result<Vec<RustNode>> {
     statements.iter().map(transform_statement).collect()
+}
+
+
+fn snake_to_camel_case(name: &str) -> String {
+    if name.contains('_') {
+        // Convert only snake_case strings
+        name.split('_')
+            .enumerate()
+            .map(|(i, part)| {
+                if i == 0 {
+                    part.to_ascii_lowercase()
+                } else {
+                    let mut chars = part.chars();
+                    chars
+                        .next()
+                        .map(|c| c.to_ascii_uppercase().to_string())
+                        .unwrap_or_default()
+                        + chars.as_str()
+                }
+            })
+            .collect::<String>()
+    } else {
+        // Leave already camelCase or PascalCase strings unchanged
+        name.to_string()
+    }
 }

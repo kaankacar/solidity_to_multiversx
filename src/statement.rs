@@ -20,6 +20,7 @@ pub fn transform_statement(stmt: &pt::Statement) -> Result<RustNode> {
                 is_view: false,
             })
         }
+        
         pt::Statement::Expression(_, expr) => {
             match expr {
                 // Match an assignment expression
@@ -246,6 +247,6 @@ pub fn transform_statement(stmt: &pt::Statement) -> Result<RustNode> {
             })
         }
 
-        _ => Err(anyhow!("Unsupported statement type")),
+        _ => Err(anyhow!("Unsupported statement type {}", stmt)),
     }
 }
