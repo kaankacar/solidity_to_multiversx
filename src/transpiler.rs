@@ -1,11 +1,12 @@
 use crate::helper_functions::convert_expression_to_type;
 use crate::parser::ParsedContract;
 use crate::rust_ast::{RustExpression, RustNode, RustParameter, RustVisibility};
-use crate::statement::transform_statement;
+use crate::statement::{statements_contains_return, transform_statements, snake_to_camel_case};
 use crate::type_mapper::map_type;
 use anyhow::{anyhow, Result};
 use inflector::Inflector;
 use solang_parser::pt;
+
 
 pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
     let mut output = String::new();
@@ -28,121 +29,123 @@ pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
                 contract_name
             ));
             let rust_body = transform_contract_with_attributes(&contract)?;
+
             for node in &rust_body {
-                match node {
-                    // Handle storage definitions
-                    RustNode::StorageDefinition {
-                        name, type_name, ..
-                    } => {
-                        output.push_str(&format!(
-                            "    #[storage_mapper(\"{}\")]\n    pub fn {}(&self) -> SingleValueMapper<{}>;\n",
-                            name,
-                            name.to_snake_case(), // Convert to snake_case for Rust naming conventions
-                            type_name
-                        ));
-                    }
-
-                    // Handle constructor definitions
-                    RustNode::Function {
+                if let RustNode::StorageDefinition {
+                    name, type_name, ..
+                } = node
+                {
+                    output.push_str(&format!(
+                        "    #[storage_mapper(\"{}\")]\n    pub fn {}(&self) -> SingleValueMapper<{}>;\n",
                         name,
-                        params,
-                        visibility,
-                        ..
-                    } if name == "init" && *visibility == RustVisibility::Public => {
-                        let params_str = params
-                            .iter()
-                            .map(|p| format!("{}: {}", p.name.to_snake_case(), p.type_name))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        output.push_str(&format!(
-                            "    #[init]\n    fn init(&self, {}) {{\n        // Initialization logic here\n    }}\n",
-                            params_str
-                        ));
-                    }
-
-                    _ => {
-                        // Log unsupported nodes for debugging
-                        println!("Unsupported node type in trait definition: {:?}", node);
-                    }
+                        name.to_snake_case(),
+                        type_name
+                    ));
                 }
             }
+
             output.push_str("}\n\n");
 
             // Generate implementation
             output.push_str(&format!("impl {} {{\n", contract_name));
+
             for node in rust_body {
-                if let RustNode::Function {
-                    name,
-                    params,
-                    body,
-                    is_endpoint,
-                    is_view,
-                    visibility,
-                    returns, // Add this field from the RustNode
-                    ..
-                } = node
-                {
-                    let annotation_name = snake_to_camel_case(&name);
+                match node {
+                    // Handle function definitions
+                    RustNode::Function {
+                        name,
+                        params,
+                        body,
+                        is_endpoint,
+                        is_view,
+                        visibility,
+                        returns,
+                        ..
+                    } => {
+                        let annotation_name = snake_to_camel_case(&name);
 
-                    let annotation = if is_endpoint {
-                        format!("    #[endpoint({})]\n", annotation_name)
-                    } else if is_view {
-                        format!("    #[view({})]\n", annotation_name)
-                    } else if annotation_name.is_empty() {
-                        "    #[init]\n".to_string()
-                    } else {
-                        String::new()
-                    };
-                    output.push_str(&annotation);
-
-                    // Add function signature
-                    let function_name = if name.is_empty() { "init" } else { &name.to_snake_case() };
-                    let function_visibility = if visibility == RustVisibility::Private {
-                        ""
-                    } else {
-                        "pub "
-                    };
-
-                    let params_str = params
-                        .iter()
-                        .map(|p| format!("{}: {}", p.name, p.type_name))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    // Generate the return type from the `returns` field
-                    let return_type = if let Some(return_params) = returns {
-                        if !return_params.is_empty() {
-                            format!(" -> {}", return_params[0].type_name)
+                        let annotation = if is_endpoint {
+                            format!("    #[endpoint({})]\n", annotation_name)
+                        } else if is_view {
+                            format!("    #[view({})]\n", annotation_name)
+                        } else if name.is_empty() {
+                            "    #[init]\n".to_string()
                         } else {
                             String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
+                        };
+                        output.push_str(&annotation);
 
-                    output.push_str(&format!(
-                        "    {}fn {}(&self{}){} {{\n",
-                        function_visibility,
-                        function_name,
-                        if params_str.is_empty() {
-                            String::new()
+                        // Add function signature
+                        let function_name =
+                            if name.is_empty() { "init" } else { &name.to_snake_case() };
+                        let function_visibility = if visibility == RustVisibility::Private {
+                            ""
                         } else {
-                            format!(", {}", params_str)
-                        },
-                        return_type
-                    ));
+                            "pub "
+                        };
 
-                    // Add function body
-                    for stmt in body {
+                        let params_str = params
+                            .iter()
+                            .map(|p| format!("{}: {}", p.name, p.type_name))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        // Generate the return type
+                        let return_type = if let Some(return_params) = returns {
+                            if !return_params.is_empty() {
+                                format!(" -> {}", return_params[0].type_name)
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+
                         output.push_str(&format!(
-                            "        {}\n",
-                            transform_rust_node_to_code(&stmt)?
+                            "    {}fn {}(&self{}){} {{\n",
+                            function_visibility,
+                            function_name,
+                            if params_str.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {}", params_str)
+                            },
+                            return_type
+                        ));
+
+                        // Add function body
+                        for stmt in body {
+                            output.push_str(&format!(
+                                "        {}\n",
+                                transform_rust_node_to_code(&stmt)?
+                            ));
+                        }
+
+                        output.push_str("    }\n");
+                    }
+
+                    // Handle event definitions
+                    RustNode::EventDefinition { name, params } => {
+                        let params_str = params
+                            .iter()
+                            .map(|param| {
+                                format!(", {}: {}", param.name.to_snake_case(), param.type_name)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        output.push_str(&format!(
+                            "\n    #[event(\"{}\")]\n    fn {}_event(&self{});\n",
+                            name,
+                            name.to_snake_case(),
+                            params_str
                         ));
                     }
 
-                    output.push_str("    }\n");
+                    _ => {}
                 }
             }
+
             output.push_str("}\n");
         }
     }
@@ -366,6 +369,7 @@ fn transform_contract_with_attributes(contract: &pt::ContractDefinition) -> Resu
                     .as_ref()
                     .map(|id| id.name.clone())
                     .unwrap_or_default();
+            
                 let params = event_def
                     .fields
                     .iter()
@@ -375,14 +379,44 @@ fn transform_contract_with_attributes(contract: &pt::ContractDefinition) -> Resu
                             .as_ref()
                             .map(|id| id.name.clone())
                             .unwrap_or_default();
+                        
                         let param_type = map_type(&convert_expression_to_type(&param.ty)?)?;
-                        Ok(RustParameter {
+            
+                        // Check if the parameter is indexed
+                        let indexed = param.indexed;
+            
+                        Ok((param_name, param_type, indexed))
+                    })
+                    .collect::<Result<Vec<(String, String, bool)>>>()?;
+            
+                // Create the Rust event function
+                let rust_event = format!(
+                    "    #[event(\"{}\")]\n    fn {}(&self{}) {{\n    }}",
+                    name,
+                    snake_to_camel_case(&name),
+                    params
+                        .iter()
+                        .map(|(param_name, param_type, indexed)| {
+                            if *indexed {
+                                format!(", #[indexed] {}: {}", param_name.to_snake_case(), param_type)
+                            } else {
+                                format!(", {}: {}", param_name.to_snake_case(), param_type)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                );
+            
+                rust_nodes.push(RustNode::EventDefinition {
+                    name,
+                    params: params
+                        .into_iter()
+                        .map(|(param_name, param_type, _)| RustParameter {
                             name: param_name,
                             type_name: param_type,
                         })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                rust_nodes.push(RustNode::EventDefinition { name, params });
+                        .collect(),
+                });
             }
             _ => {
                 // Log unsupported parts for debugging
@@ -493,37 +527,4 @@ fn transform_function_with_attributes(func: &pt::FunctionDefinition) -> Result<R
     })
 }
 
-// Helper function to check for `return` statements in the body
-fn statements_contains_return(statements: &[pt::Statement]) -> bool {
-    statements
-        .iter()
-        .any(|stmt| matches!(stmt, pt::Statement::Return(_, _)))
-}
-fn transform_statements(statements: &[pt::Statement]) -> Result<Vec<RustNode>> {
-    statements.iter().map(transform_statement).collect()
-}
 
-
-fn snake_to_camel_case(name: &str) -> String {
-    if name.contains('_') {
-        // Convert only snake_case strings
-        name.split('_')
-            .enumerate()
-            .map(|(i, part)| {
-                if i == 0 {
-                    part.to_ascii_lowercase()
-                } else {
-                    let mut chars = part.chars();
-                    chars
-                        .next()
-                        .map(|c| c.to_ascii_uppercase().to_string())
-                        .unwrap_or_default()
-                        + chars.as_str()
-                }
-            })
-            .collect::<String>()
-    } else {
-        // Leave already camelCase or PascalCase strings unchanged
-        name.to_string()
-    }
-}

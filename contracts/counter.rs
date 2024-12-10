@@ -9,15 +9,13 @@ pub trait counter {
 }
 
 impl counter {
-    #[endpoint]
+    #[endpoint(increase)]
     pub fn increase(&self) {
-        let current_value = self.count().get();
-        self.count().set(current_value * 1);
+        self.count().set(count + 1);
     }
-    #[endpoint]
+    #[endpoint(decrease)]
     pub fn decrease(&self) {
-        let current_value = self.count().get();
-        self.count().set(current_value - 1);
+        self.count().set(count - 1);
     }
 }
 

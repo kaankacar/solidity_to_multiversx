@@ -9,6 +9,9 @@ pub trait SimpleContract {
 }
 
 impl SimpleContract {
+
+    #[event("DataStored")]
+    fn data_stored_event(&self, data: u256);
     #[init]
     fn init(&self, initialValue: u256) {
         self.storedData().set(initialValue);
@@ -16,6 +19,7 @@ impl SimpleContract {
     #[endpoint(setData)]
     fn set_data(&self, x: u256) {
         self.storedData().set(x);
+        self.data_stored_event(x)
     }
     #[view(get)]
     pub fn get(&self) -> u256 {

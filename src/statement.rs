@@ -1,7 +1,19 @@
 use crate::helper_functions::transform_expression;
 use crate::rust_ast::{RustExpression, RustNode, RustVisibility};
 use anyhow::{anyhow, Result};
+use inflector::Inflector;
 use solang_parser::pt;
+
+
+// Helper function to check for `return` statements in the body
+pub fn statements_contains_return(statements: &[pt::Statement]) -> bool {
+    statements
+        .iter()
+        .any(|stmt| matches!(stmt, pt::Statement::Return(_, _)))
+}
+pub fn transform_statements(statements: &[pt::Statement]) -> Result<Vec<RustNode>> {
+    statements.iter().map(transform_statement).collect()
+}
 
 pub fn transform_statement(stmt: &pt::Statement) -> Result<RustNode> {
     match stmt {
@@ -20,6 +32,29 @@ pub fn transform_statement(stmt: &pt::Statement) -> Result<RustNode> {
                 is_view: false,
             })
         }
+
+        pt::Statement::Emit(_, function_call) => {
+            if let pt::Expression::FunctionCall(_, function, args) = function_call {
+                let event_name = match function.as_ref() {
+                    pt::Expression::Variable(identifier) => identifier.name.clone(),
+                    _ => return Err(anyhow!("Unsupported function in Emit")),
+                };
+                let transformed_args = args
+                    .iter()
+                    .map(transform_expression) // Transform each argument
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(RustNode::Expression(RustExpression::FunctionCall {
+                    function: Box::new(RustExpression::Identifier(format!(
+                        "self.{}_event",
+                        event_name.to_snake_case()
+                    ))),
+                    arguments: transformed_args,
+                }))
+            } else {
+                Err(anyhow!("Unsupported Emit statement"))
+            }
+        }
+        
         
         pt::Statement::Expression(_, expr) => {
             match expr {
@@ -248,5 +283,30 @@ pub fn transform_statement(stmt: &pt::Statement) -> Result<RustNode> {
         }
 
         _ => Err(anyhow!("Unsupported statement type {}", stmt)),
+    }
+}
+
+
+pub fn snake_to_camel_case(name: &str) -> String {
+    if name.contains('_') {
+        // Convert only snake_case strings
+        name.split('_')
+            .enumerate()
+            .map(|(i, part)| {
+                if i == 0 {
+                    part.to_ascii_lowercase()
+                } else {
+                    let mut chars = part.chars();
+                    chars
+                        .next()
+                        .map(|c| c.to_ascii_uppercase().to_string())
+                        .unwrap_or_default()
+                        + chars.as_str()
+                }
+            })
+            .collect::<String>()
+    } else {
+        // Leave already camelCase or PascalCase strings unchanged
+        name.to_string()
     }
 }
