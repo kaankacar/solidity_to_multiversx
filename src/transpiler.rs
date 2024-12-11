@@ -14,6 +14,8 @@ pub fn transform_with_attributes(parsed: ParsedContract) -> Result<String> {
     // Add header
     output.push_str("#![no_std]\n\n");
     output.push_str("use multiversx_sc::imports::*;\n\n");
+    output.push_str("use multiversx_sc::derive_imports::*;\n\n");
+
 
     for part in parsed.solidity_ast.0 {
         if let pt::SourceUnitPart::ContractDefinition(contract) = part {

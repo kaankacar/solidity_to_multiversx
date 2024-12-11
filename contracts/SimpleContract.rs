@@ -2,6 +2,8 @@
 
 use multiversx_sc::imports::*;
 
+use multiversx_sc::derive_imports::*;
+
 #[multiversx_sc::contract]
 pub trait SimpleContract {
     #[storage_mapper("storedData")]
