@@ -1,5 +1,58 @@
+# Solidity to MultiversX Transpiler
 
-To Run the code - 
-     cargo run -- filename.sol  
-Ex - cargo run -- SimpleContract.sol  
-Output file will be create as filename.rs
+A tool for converting Solidity smart contracts to MultiversX-compatible Rust smart contracts.
+
+## Overview
+
+This transpiler analyzes Solidity code and generates equivalent MultiversX Rust code that can be compiled and deployed on the MultiversX blockchain. It handles various Solidity features including functions, events, mappings, structs, and error handling.
+
+## Features
+
+- Converts Solidity contracts to MultiversX Rust contracts
+- Maps Solidity types to MultiversX equivalents
+- Handles events, storage variables, and mappings
+- Converts Solidity error handling to MultiversX patterns
+- Supports common Solidity control flow structures
+
+## Getting Started
+
+### Prerequisites
+
+- Rust and Cargo (latest stable or nightly)
+- MultiversX SDK tools (for deployment)
+
+### Installation
+
+```bash
+git clone https://github.com/yourusername/solidity_to_multiversx.git
+cd solidity_to_multiversx
+cargo build --release
+```
+
+### Usage
+
+```bash
+cargo run <solidity_file.sol>
+```
+
+This will:
+1. Parse the Solidity file
+2. Generate a MultiversX-compatible Rust file
+3. Compile to WebAssembly
+4. Deploy to MultiversX (if configured)
+
+## Examples
+
+See the `contracts/` directory for example Solidity contracts and their MultiversX Rust equivalents.
+
+## Documentation
+
+For detailed documentation and a developer guide, see [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md).
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
